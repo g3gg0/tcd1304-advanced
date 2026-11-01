@@ -15,14 +15,65 @@ Firmware for the STM32F401RE/Nucleo and TCD1304 linear CCD. This variant extends
 | Bytes | Capture/configuration command | Trigger configuration (`mode = 2`) |
 |---|---|---|
 | 0..1 | `45 52` (`ER`) | `45 52` (`ER`) |
-| 2..5 | SH period, unsigned 32-bit big-endian | Reserved; current firmware ignores these bytes |
-| 6..9 | ICG period, unsigned 32-bit big-endian | byte 6 selects trigger mode; bytes 7..9 ignored |
+| 2..5 | SH period, unsigned 32-bit big-endian | bytes 2..3 reserved; bytes 4..5 delay in µs, unsigned 16-bit big-endian |
+| 6..9 | ICG period, unsigned 32-bit big-endian | byte 6 selects trigger mode; bytes 7..9 reserved except for the build-information probe |
 | 10 | Capture mode: `0` one shot, `1` continuous | `2` |
-| 11 | Average count: `1..15`; zero or `>=16` means 1 | `0` |
+| 11 | Average count: `1..15`; zero or `>=16` means 1 | `0` for trigger configuration; `1` for the extended identity query below |
 
 The trigger configuration has a firmware-specific interpretation of bytes 4..6: bytes 4..5 are an unsigned 16-bit delay in microseconds, big-endian; byte 6 is the trigger selector. Selector `0` arms the external falling-edge trigger on PC13, while selector `2` starts without waiting for an external edge. The current C# application sends the delay in bytes 4..5 and uses selectors `0` and `2`.
 
 The trigger configuration command does not start a capture. Send a separate capture command to set the integration timing and begin acquisition. For externally triggered acquisition, PC13 must first be observed inactive/high; its subsequent falling edge starts the sequence after the configured delay. Trigger delay is limited to 0..65535 us.
+
+## Identity and build information (extension v1)
+
+The original identity query remains exactly compatible with existing C# hosts:
+
+```text
+Host:   45 52 00 00 00 00 FF 00 01 00 02 00
+Device: 5B 67 33 67 67 30 2E 64 65 5D       ASCII [g3gg0.de]
+```
+
+After verifying this identity, a host may send a second, explicitly marked query:
+
+```text
+Host: 45 52 00 00 00 00 FF 42 49 31 02 01
+                            B  I  1
+```
+
+This uses selector `FF`, bytes 7..9 `BI1`, mode byte 10 `02`, and revision byte 11 `01`. New firmware responds as follows:
+
+| Offset | Length | Content |
+|---|---|---|
+| 0 | 10 | ASCII `[g3gg0.v1]` (no NUL) |
+| 10 | 2 | Payload length `N`, unsigned 16-bit **big-endian**, 1..1024 |
+| 12 | N | UTF-8 JSON build metadata, no trailing NUL/newline |
+
+Example JSON (actual values are generated at build time):
+
+```json
+{"firmware":"tcd1304-advanced","protocol":1,"version":"1.1.0","built_at":"2026-11-01T12:34:56Z","build_timezone":"UTC","commit":"9376e02864f1fc524f94398520c686b4e46f92af","describe":"9376e02","branch":"master","dirty":true,"board":"nucleo_f401re","mcu":"stm32f401ret6","environment":"nucleo_f411re","compiler":"7.2.1","cpu_hz":84000000,"ccd_clock_hz":2000000}
+```
+
+`firmware` and `protocol` identify the metadata schema. `version` is the configured firmware release version, while `commit` is the full Git HEAD ID. `dirty` records tracked changes **or untracked files** at build time; it is `null` when Git state is unavailable. `built_at` is an ISO 8601 UTC timestamp for PlatformIO builds. `cpu_hz` and `ccd_clock_hz` describe configured clocks, not hardware timing measurements. Unknown optional metadata is `null`.
+
+Older advanced firmware safely interprets the second query as an ordinary identity request and responds with `[g3gg0.de]` only. The web host then continues with legacy identity verification and explicitly marks build information unavailable. Hosts must not assume a length field follows this legacy response. Neither query starts an acquisition. New firmware also leaves trigger settings unchanged when answering identity queries.
+
+Only request build information before acquisition or between complete frames: metadata and spectra share the same unframed UART transport. Validate the response magic, length and JSON schema before sending a capture command. Receiving an extended response with an invalid length, unsupported schema, invalid UTF-8 or incomplete JSON must fail the connection rather than treating metadata bytes as spectrum data.
+
+### Generating build metadata
+
+`platformio.ini` runs `tools/build_info.py` before compilation. The helper creates `.pio/build/<environment>/generated/build_info.generated.h`, which is embedded by `src/build_info.c`. Generated metadata remains outside the tracked source tree. `custom_firmware_version` controls the release version. Git is optional: source archives build with an unknown commit and working-tree state.
+
+`SOURCE_DATE_EPOCH`, if set, supplies the UTC build timestamp for reproducible builds. Otherwise each build records the current UTC time. Non-PlatformIO builds use compiler date/time with an explicitly unspecified timezone and unknown Git provenance.
+
+Build and generator tests:
+
+```text
+pio run -e nucleo_f411re
+python -m unittest discover -s tests -v
+```
+
+The existing environment name `nucleo_f411re` is retained for compatibility; its configured board is **nucleo_f401re**.
 
 ## Capture behavior
 
@@ -37,4 +88,28 @@ On a capture command, the firmware flushes the CCD, applies SH and ICG timing, t
 
 ## Build and license
 
-The PlatformIO project targets `nucleo_f401re` with the STM32 Standard Peripheral Library. The firmware is based on Esben Rossel's TCD1304 driver; see <https://tcd1304.wordpress.com/>. Source and binaries retain the FreeBSD license terms in the source headers.
+The PlatformIO project targets `nucleo_f401re` with the STM32 Standard Peripheral Library. The PlatformIO environment is named `nucleo_f411re` for historical reasons, but it builds for the **F401RE**, not the F411RE.
+
+### Local build
+
+Install GNU Make and PlatformIO Core on Windows or Linux (tested with Core 6.2.0), then run in this directory:
+
+```sh
+make
+```
+
+The Makefile looks for the standard PlatformIO IDE installation in `~/.platformio/penv` (or `%USERPROFILE%\.platformio\penv` on Windows), then for `pio` on `PATH`. If needed, specify the executable explicitly, for example in Windows PowerShell:
+
+```powershell
+make "PIO=C:\Users\yourname\.platformio\penv\Scripts\pio.exe"
+```
+
+PlatformIO may download the STM32 platform and compiler on the first build. The outputs are:
+
+- `.pio/build/nucleo_f411re/firmware.hex` — copy this to the `NODE_F401RE` drive to program the board.
+- `.pio/build/nucleo_f411re/firmware.bin`
+- `.pio/build/nucleo_f411re/firmware.elf`
+
+Run `make clean` to remove the PlatformIO build output. GitHub Actions uses the same Makefile and publishes the firmware files as a build artifact.
+
+The firmware is based on Esben Rossel's TCD1304 driver; see <https://tcd1304.wordpress.com/>. Source and binaries retain the FreeBSD license terms in the source headers.

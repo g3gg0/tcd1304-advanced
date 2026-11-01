@@ -112,7 +112,7 @@ void USART2_conf()
     USART_DMACmd(USART2, USART_DMAReq_Rx, ENABLE);
 }
 
-void UART2_SendData(uint8_t *data, uint32_t length)
+void UART2_SendData(const uint8_t *data, uint32_t length)
 {
     /* A completed DMA stream remains enabled. Disable it before changing NDTR/M0AR. */
     DMA_Cmd(DMA1_Stream6, DISABLE);
@@ -122,7 +122,7 @@ void UART2_SendData(uint8_t *data, uint32_t length)
     DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_FEIF6 | DMA_FLAG_DMEIF6 | DMA_FLAG_TEIF6 |
                                  DMA_FLAG_HTIF6 | DMA_FLAG_TCIF6);
     DMA_SetCurrDataCounter(DMA1_Stream6, length);
-    DMA_MemoryTargetConfig(DMA1_Stream6, data, DMA_Memory_0);
+    DMA_MemoryTargetConfig(DMA1_Stream6, (uint32_t)data, DMA_Memory_0);
 
     /* Enable DMA stream */
     DMA_Cmd(DMA1_Stream6, ENABLE);
@@ -157,7 +157,7 @@ void UART2_Tx_DMA(void)
     DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_FEIF6 | DMA_FLAG_DMEIF6 | DMA_FLAG_TEIF6 |
                                  DMA_FLAG_HTIF6 | DMA_FLAG_TCIF6);
     DMA_SetCurrDataCounter(DMA1_Stream6, 2 * CCDSize);
-    DMA_MemoryTargetConfig(DMA1_Stream6, aTxBuffer, DMA_Memory_0);
+    DMA_MemoryTargetConfig(DMA1_Stream6, (uint32_t)aTxBuffer, DMA_Memory_0);
 
     /* Notice that UART is 8-bit. The 12-bit data from the ADC
     is stored in a 16-bit array and sent 8-bit at a time. This

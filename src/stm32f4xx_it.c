@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "main.h"
+#include "build_info.h"
 
 extern __IO uint32_t SH_period;
 extern __IO uint32_t ICG_period;
@@ -149,14 +150,21 @@ void DMA1_Stream5_IRQHandler(void)
                 extern __IO uint32_t trigger_delay;
                 extern __IO uint8_t trigger_level;
 
-                trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
-
                 if(nRxBuffer[6] == 0xFF)
                 {
-                    UART2_SendData("[g3gg0.de]", 10);
+                    if (nRxBuffer[7] == 'B' && nRxBuffer[8] == 'I' &&
+                        nRxBuffer[9] == '1' && nRxBuffer[11] == 1)
+                    {
+                        UART2_SendBuildInfo();
+                    }
+                    else
+                    {
+                        UART2_SendData((const uint8_t *)"[g3gg0.de]", 10);
+                    }
                 }
                 else
                 {
+                    trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
                     trigger_level = nRxBuffer[6];
                 }
             }
