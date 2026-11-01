@@ -11,10 +11,43 @@ permissions:
   contents: write
 
 jobs:
+  commits:
+    runs-on: ubuntu-latest
+    outputs:
+      shas: ${{ steps.commits.outputs.shas }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: commits
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          before = os.environ.get("BEFORE", "")
+          shas = [os.environ["SHA"]]
+          if os.environ["EVENT"] == "push" and before and set(before) != {"0"}:
+              shas = subprocess.check_output(
+                  ["git", "rev-list", "--reverse", before + ".." + os.environ["SHA"]],
+                  text=True).splitlines() or shas
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("shas=" + json.dumps(shas) + "\n")
+          PY
   build:
+    needs: commits
+    strategy:
+      fail-fast: false
+      matrix:
+        sha: ${{ fromJSON(needs.commits.outputs.shas) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
 
       - uses: actions/cache@v4
         with:
@@ -39,11 +72,37 @@ jobs:
           cp .pio/build/nucleo_f411re/firmware.bin dist/tcd1304-advanced.bin
           cp .pio/build/nucleo_f411re/firmware.elf dist/tcd1304-advanced.elf
           cp .pio/build/nucleo_f411re/firmware.hex dist/tcd1304-advanced.hex
+          python - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          binary = pathlib.Path("dist/tcd1304-advanced.bin").read_bytes()
+          manifest = {
+              "board": "nucleo_f401re",
+              "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "filename": "tcd1304-advanced.bin",
+              "size": len(binary),
+              "sha256": hashlib.sha256(binary).hexdigest(),
+          }
+          pathlib.Path("dist/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tcd1304-advanced-firmware
+          name: tcd1304-advanced-firmware-${{ matrix.sha }}
           path: dist/*
+
+      - name: Publish commit prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ matrix.sha }}
+          target_commitish: ${{ matrix.sha }}
+          name: Firmware ${{ matrix.sha }}
+          prerelease: true
+          make_latest: false
+          overwrite_files: false
+          files: |
+            dist/tcd1304-advanced.bin
+            dist/manifest.json
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -52,3 +111,4 @@ jobs:
           files: |
             dist/tcd1304-advanced.bin
             dist/tcd1304-advanced.hex
+            dist/manifest.json
