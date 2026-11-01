@@ -41,6 +41,7 @@ jobs:
     needs: commits
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         sha: ${{ fromJSON(needs.commits.outputs.shas) }}
     runs-on: ubuntu-latest
@@ -68,6 +69,7 @@ jobs:
         run: make
 
       - name: Collect binaries
+        id: metadata
         run: |
           mkdir -p dist
           cp .pio/build/nucleo_f411re/firmware.bin dist/tcd1304-advanced.bin
@@ -82,8 +84,14 @@ jobs:
               "filename": "tcd1304-advanced.bin",
               "size": len(binary),
               "sha256": hashlib.sha256(binary).hexdigest(),
+              "title": subprocess.check_output(["git", "log", "-1", "--format=%s"], text=True).strip(),
+              "date": subprocess.check_output(["git", "show", "-s", "--format=%cI", "HEAD"], text=True).strip(),
           }
           pathlib.Path("dist/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+          title = subprocess.check_output(["git", "log", "-1", "--format=%s"], text=True).strip()
+          import os
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("title=" + title.replace("\n", " ").replace("\r", " ") + "\n")
           PY
 
       - uses: actions/upload-artifact@v4
@@ -97,13 +105,88 @@ jobs:
         with:
           tag_name: build-${{ matrix.sha }}
           target_commitish: ${{ matrix.sha }}
-          name: Firmware ${{ matrix.sha }}
+          name: ${{ steps.metadata.outputs.title }}
           prerelease: true
           make_latest: false
           overwrite_files: false
           files: |
             dist/tcd1304-advanced.bin
             dist/manifest.json
+
+  firmware-pages:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: firmware-pages
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tcd1304-advanced-firmware-*
+          path: artifacts
+      - name: Maintain firmware archive and catalog
+        run: |
+          branch=$(git ls-remote --heads origin gh-pages)
+          if [ -n "$branch" ]; then
+            git fetch origin gh-pages
+            git worktree add site FETCH_HEAD
+          else
+            git worktree add --detach site HEAD
+            git -C site switch --orphan gh-pages
+          fi
+          python - <<'PY'
+          import hashlib, json, pathlib, shutil
+          site = pathlib.Path("site")
+          for manifest_path in pathlib.Path("artifacts").glob("*/manifest.json"):
+              manifest = json.loads(manifest_path.read_text())
+              sha = manifest["commit"]
+              if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+                  raise ValueError("Invalid firmware commit")
+              binary = manifest_path.parent / manifest["filename"]
+              if hashlib.sha256(binary.read_bytes()).hexdigest() != manifest["sha256"]:
+                  raise ValueError("Firmware checksum mismatch")
+              destination = site / "builds" / sha
+              if destination.exists():
+                  if (destination / "firmware.bin").read_bytes() != binary.read_bytes():
+                      print("Preserving existing immutable firmware build", sha)
+                  continue
+              destination.mkdir(parents=True)
+              shutil.copyfile(binary, destination / "firmware.bin")
+              shutil.copyfile(manifest_path, destination / "manifest.json")
+          builds = []
+          for manifest_path in (site / "builds").glob("*/manifest.json"):
+              manifest = json.loads(manifest_path.read_text())
+              sha = manifest["commit"]
+              builds.append({
+                  "commit": sha, "name": manifest.get("title", sha),
+                  "date": manifest.get("date", ""),
+              })
+          builds.sort(key=lambda build: (build["date"], build["commit"]), reverse=True)
+          (site / "catalog.json").write_text(json.dumps({"builds": builds}), encoding="utf-8")
+          (site / ".nojekyll").touch()
+          PY
+          git -C site config user.name github-actions[bot]
+          git -C site config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C site add .
+          if ! git -C site diff --cached --quiet; then
+            git -C site commit -m "Publish firmware catalog"
+            git -C site push origin HEAD:gh-pages
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
