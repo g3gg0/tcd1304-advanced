@@ -1,5 +1,7 @@
+# This environment name is historical; platformio.ini selects the F401RE.
 PIO_ENV ?= nucleo_f411re
 
+# The PlatformIO IDE's private Core installation may not be on PATH.
 empty :=
 space := $(empty) $(empty)
 windows_pio := $(subst \,/,$(USERPROFILE))/.platformio/penv/Scripts/pio.exe
