@@ -187,7 +187,7 @@ jobs:
           git -C site config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git -C site add .
           if ! git -C site diff --cached --quiet; then
-            git -C site commit -m "Publish firmware catalog"
+            git -C site commit -m "Publish firmware catalog" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
             git -C site push origin HEAD:gh-pages
           fi
       - uses: actions/configure-pages@v5
