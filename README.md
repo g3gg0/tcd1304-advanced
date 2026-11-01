@@ -92,17 +92,23 @@ The PlatformIO project targets `nucleo_f401re` with the STM32 Standard Periphera
 
 ### Local build
 
-Install GNU Make and PlatformIO Core on Windows or Linux (tested with Core 6.2.0), then run in this directory:
+Install GNU Make and Python 3 on Windows or Linux, then run in this directory:
 
 ```sh
 make
 ```
 
-The Makefile looks for the standard PlatformIO IDE installation in `~/.platformio/penv` (or `%USERPROFILE%\.platformio\penv` on Windows), then for `pio` on `PATH`. If needed, specify the executable explicitly, for example in Windows PowerShell:
+The Makefile uses a project-local PlatformIO environment if present, otherwise the standard PlatformIO IDE installation in `~/.platformio/penv` (or `%USERPROFILE%\.platformio\penv` on Windows), then `pio` or `platformio` on `PATH`. If none exists, it automatically installs PlatformIO Core 6.2.0 in `.pio/venv-linux` or `.pio/venv-win32`. That fallback also stores the downloaded STM32 platform and compiler in `.pio/core-linux` or `.pio/core-win32`, without installing anything globally. These directories are ignored by Git and kept by `make clean`.
+
+Windows and WSL use separate environments, even when sharing the same project directory. On Ubuntu/Debian, the automatic installation requires `python3-venv`; the first build requires internet access.
+
+If needed, specify the PlatformIO executable explicitly, for example in Windows PowerShell:
 
 ```powershell
 make "PIO=C:\Users\yourname\.platformio\penv\Scripts\pio.exe"
 ```
+
+The default Python command is `python` on Windows and `python3` on Linux. Override it with `make PYTHON=python3.12` or `make "PYTHON=C:\path\to\python.exe"` if needed.
 
 PlatformIO may download the STM32 platform and compiler on the first build. The outputs are:
 
