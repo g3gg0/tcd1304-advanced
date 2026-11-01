@@ -88,7 +88,9 @@ On a capture command, the firmware flushes the CCD, applies SH and ICG timing, t
 
 ## Build and license
 
-GitHub Actions builds every newly pushed commit on `master` (including multiple commits in one push) and publishes a prerelease tagged `build-<full-commit-sha>`. Only successful builds are published. The first push of a new branch builds its tip; pull requests build without publishing. Pushing `v*` tags still publishes regular releases. Each commit prerelease contains `tcd1304-advanced.bin` and `manifest.json` with the target board, full commit, binary size and SHA-256 checksum. Re-running a published build does not overwrite existing assets. SpectrumPlotterWeb uses these prereleases to offer firmware downloads.
+GitHub Actions builds every newly pushed commit on `master` (including multiple commits in one push) and publishes a prerelease tagged `build-<full-commit-sha>`. Only successful builds are published. The first push of a new branch builds its tip; pull requests build without publishing. Pushing `v*` tags still publishes regular releases. Each commit prerelease contains `tcd1304-advanced.bin` and `manifest.json` with the target board, full commit, binary size and SHA-256 checksum. Re-running a published build does not overwrite existing assets.
+
+The workflow also maintains an immutable firmware archive on the `gh-pages` branch and deploys it using GitHub Pages. Enable **Settings → Pages → Source: GitHub Actions** in this firmware repository. SpectrumPlotterWeb loads `https://g3gg0.github.io/tcd1304-advanced/catalog.json` and `builds/<commit>/firmware.bin` directly in the browser, avoiding release-download CORS restrictions. Previous builds remain in the archive; `manifest.json` accompanies each binary. The Pages publication runs after the push's build jobs succeed. Releases created before this archive was introduced are not automatically backfilled.
 
 The PlatformIO project targets `nucleo_f401re` with the STM32 Standard Peripheral Library. The PlatformIO environment is named `nucleo_f411re` for historical reasons, but it builds for the **F401RE**, not the F411RE.
 
