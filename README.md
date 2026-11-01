@@ -7,7 +7,7 @@ Firmware for the STM32F401RE/Nucleo and TCD1304 linear CCD. This variant extends
 - UART2, 8 data bits, no parity, 1 stop bit (8N1), no flow control.
 - Host to device commands are exactly 12 bytes. Bytes are indexed from zero.
 - The command sync bytes are ASCII `E`, `R` (`0x45 0x52`). Firmware DMA receives a circular 12-byte buffer and searches for this sync, including a sync split across the buffer boundary.
-- Device to host spectrum data is exactly `3694 * 2 = 7388` bytes: 3694 little-endian unsigned 16-bit ADC samples, with no header, checksum, or terminator. The host must read a complete fixed-size payload before issuing/handling the next capture.
+- Default/legacy device to host spectrum data is exactly `3694 * 2 = 7388` bytes: 3694 little-endian unsigned 16-bit ADC samples, with no header, checksum, or terminator. The host must read a complete fixed-size payload before issuing/handling the next capture. Negotiated downsampling/encoding changes this format as specified below.
 - ADC values are sent as captured/averaged; the wire representation is low byte followed by high byte. Values are nominally 12-bit.
 
 ## Command layout
@@ -16,7 +16,7 @@ Firmware for the STM32F401RE/Nucleo and TCD1304 linear CCD. This variant extends
 |---|---|---|
 | 0..1 | `45 52` (`ER`) | `45 52` (`ER`) |
 | 2..5 | SH period, unsigned 32-bit big-endian | bytes 2..3 reserved; bytes 4..5 delay in µs, unsigned 16-bit big-endian |
-| 6..9 | ICG period, unsigned 32-bit big-endian | byte 6 selects trigger mode; bytes 7..9 reserved except for the build-information probe |
+| 6..9 | ICG period, unsigned 32-bit big-endian | byte 6 selects trigger mode/extension; bytes 7..9 reserved except for the build-information and downsample extensions |
 | 10 | Capture mode: `0` one shot, `1` continuous | `2` |
 | 11 | Average count: `1..15`; zero or `>=16` means 1 | `0` for trigger configuration; `1` for the extended identity query below |
 
@@ -123,3 +123,89 @@ PlatformIO may download the STM32 platform and compiler on the first build. The 
 Run `make clean` to remove the PlatformIO build output. GitHub Actions uses the same Makefile and publishes the firmware files as a build artifact.
 
 The firmware is based on Esben Rossel's TCD1304 driver; see <https://tcd1304.wordpress.com/>. Source and binaries retain the FreeBSD license terms in the source headers.
+
+## Downsampling and sample encoding (firmware 1.2.0)
+
+Discover capabilities through the existing `FF / BI1` build-information query. The JSON adds:
+
+```json
+{"features":["downsample-v1","sample-encoding-v1"],"max_downsample":64,"pixels":3694,"adc_bits":12}
+```
+
+The metadata envelope remains protocol 1. **Never send `FE` to firmware that does not advertise `downsample-v1`**: old firmware interprets it as a trigger selector. Encoding other than raw16 additionally requires `sample-encoding-v1`. Version strings alone are not capability detection. Existing C# clients retain their full raw frames without changes.
+
+### Configure the next one-shot
+
+Send exactly 12 bytes, wait for and validate its 8-byte acknowledgement, then send an ordinary capture command. No capture starts from this configuration alone. Do not send commands during acquisition/transfer.
+
+| Offset | Meaning |
+|---|---|
+| 0..1 | ASCII `ER` (`45 52`) |
+| 2..3 | Stride N, uint16 big-endian, 1..64 |
+| 4..5 | Trigger delay, uint16 big-endian, microseconds |
+| 6 | `FE` extension selector |
+| 7 | Trigger: `00` external falling edge PC13, `02` immediate |
+| 8..9 | ASCII `D1` (`44 31`) |
+| 10 | `02` configuration mode |
+| 11 | Low nibble revision `1`; bits 4..5 encoding ID; bits 6..7 zero |
+
+Encoding IDs: 0=raw16, 1=log10, 2=packed12, 3=log8. Byte 11 is respectively `01`, `11`, `21`, `31` hexadecimal. Firmware rejects all other revision/flag bits, invalid strides and invalid triggers without mutating configuration.
+
+Example: stride 15, immediate trigger, zero delay, logarithmic 8-bit:
+
+```text
+Host:   45 52 00 0F 00 00 FE 02 44 31 02 31
+Device: 44 53 31 00 00 0F 00 F7
+```
+
+Acknowledgement: bytes 0..1 ASCII `DS`; byte 2 echoes the revision/encoding byte; byte 3 status (0 success, 1 invalid); bytes 4..5 accepted stride; bytes 6..7 sample count `ceil(3694/N)`, both uint16 big-endian. An invalid request has zero stride/count. Host must validate the complete acknowledgement before capture; on mismatch, disconnect instead of assuming stream alignment.
+
+The accepted stride/encoding is consumed by the next capture and immediately resets to N=1/raw16 for subsequent commands. Continuous mode always uses full raw16 frames. An ordinary trigger command or identity/build query also resets pending settings. Hosts therefore configure `FE` before **every** optimized one-shot. Legacy trigger configuration keeps its existing no-ack behavior.
+
+### Frame layout
+
+N=1 with raw16 retains the original 7388-byte response with no header. All other combinations use a **16-byte header**, followed by exactly `ceil(sample_count * bits_per_sample / 8)` bytes:
+
+| Offset | Meaning |
+|---|---|
+| 0..3 | ASCII `DSF1` |
+| 4..5 | Big-endian uint16: encoding ID in bits 14..15, stride in bits 0..13 |
+| 6..7 | Sample count, uint16 big-endian |
+| 8..9 | Minimum ADC count over the full 3694-pixel frame |
+| 10..11 | Maximum ADC count over the full frame |
+| 12..13 | Full-frame count of saturated samples (`==4095`) |
+| 14..15 | Full-frame count of invalid samples (`>4095`) |
+
+All header integers are big-endian. Payload samples correspond to original pixels `0,N,2N,... <3694`, with no synthetic endpoint. Dark subtraction and wavelength mapping must use these original pixel indices. Statistics are computed **before** decimation/encoding, so omitted/clipped pixels still cause an ADC error. Existing hardware averaging precedes these statistics and can hide clipping in an individual integration, as before.
+
+Raw16 payload is uint16 little-endian. Packed12/log10/log8 payload is a continuous **least-significant-bit first** stream: sample 0 occupies the lowest bits of byte 0; subsequent sample bits fill following positions/bytes without per-sample padding. Unused high bits in the final byte are zero. Packed12 preserves all ADC bits exactly. Invalid ADC values are clamped to 4095 only for packed/log payloads; the original full-frame invalid count remains in the header.
+
+For logarithmic formats with B=10 or B=8, unsigned integer code Q and reconstructed count V are:
+
+```text
+Q = floor(log(1 + ADC) / log(4096) * (2^B - 1) + 0.5)
+V = floor(exp(Q / (2^B - 1) * log(4096)) - 1 + 0.5)
+```
+
+Both endpoints (0 and 4095) are preserved. Log10 gives approximately 0.41% half-step error in `(ADC+1)`; log8 approximately 1.65%, plus integer rounding. Near full scale these can be roughly 17 / 67 ADC counts. Log values can reconstruct to 4095 even when the original was below saturation: **use header statistics for exposure assessment**, never the decoded peak. Quantization occurs before browser dark subtraction, so weak dark-corrected residuals on a large baseline can have larger relative errors. Calibration batches always request N=1/raw16.
+
+Firmware uses generated flash lookup tables (`tools/generate_log_encoding.py`) rather than per-pixel logarithms. In-place decimation and packing reuse the ADC buffer after the completed one-shot, without a second frame-sized RAM allocation. The full sensor is still sampled at the existing clock/timing; this mode reduces UART traffic only.
+
+### Resolution, bandwidth and limits
+
+The web app requests `N = min(max_downsample, ceil(3694 / plot_resolution))` automatically, with an independently selected sample encoding. Defaults: 12-bit lossless, plot target 1850 (N=2, 1847 actual samples). Targets 1024/512/256/128/64 select N=4/8/15/29/58. Changes apply to the next frame, keeping the currently received frame's geometry/encoding fixed. Legacy firmware remains full raw16 with browser-side plot reduction.
+
+At 500000 baud/8N1, payload transfer time is `bytes * 10 / 500000` seconds. These examples include a frame header where required, excluding configuration/ack commands, exposure, readout, flush and host latency:
+
+| Mode | Samples | Bytes/frame | UART time |
+|---|---:|---:|---:|
+| Full raw16 | 3694 | 7388 | 147.76 ms |
+| Full packed12 | 3694 | 5557 | 111.14 ms |
+| Full log10 | 3694 | 4634 | 92.68 ms |
+| Full log8 | 3694 | 3710 | 74.20 ms |
+| Target 256, N=15, raw16 | 247 | 510 | 10.20 ms |
+| Target 256, N=15, packed12 | 247 | 387 | 7.74 ms |
+| Target 256, N=15, log10 | 247 | 325 | 6.50 ms |
+| Target 256, N=15, log8 | 247 | 263 | 5.26 ms |
+
+These are calculated serial times, **not measured frame rates or a 50-FPS guarantee**. The current repeated-one-shot implementation retains its CCD flush/readout/exposure delays. Nth-sample decimation can miss narrow spectral peaks; select full resolution for line identification and precise measurements. There is still no payload CRC or sequence number; header validation detects geometry/framing errors but cannot detect arbitrary payload corruption.

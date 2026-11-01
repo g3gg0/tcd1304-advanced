@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "main.h"
+#include "downsample.h"
 #include "build_info.h"
 
 extern __IO uint32_t SH_period;
@@ -150,8 +151,26 @@ void DMA1_Stream5_IRQHandler(void)
                 extern __IO uint32_t trigger_delay;
                 extern __IO uint8_t trigger_level;
 
-                if(nRxBuffer[6] == 0xFF)
+                if (nRxBuffer[6] == 0xFE)
                 {
+                    uint16_t stride = (nRxBuffer[2] << 8) | nRxBuffer[3];
+                    uint8_t valid = stride >= 1 && stride <= MAX_DOWNSAMPLE &&
+                        (nRxBuffer[7] == 0 || nRxBuffer[7] == 2) &&
+                        nRxBuffer[8] == 'D' && nRxBuffer[9] == '1' && (nRxBuffer[11] & 0xCF) == 1;
+                    uint16_t count = valid ? (CCDSize + stride - 1) / stride : 0;
+                    uint8_t ack[8] = {'D', 'S', nRxBuffer[11], valid ? 0 : 1, 0, 0, count >> 8, count};
+                    if (valid) {
+                        pending_stride = stride;
+                        pending_encoding = (nRxBuffer[11] >> 4) & 3;
+                        trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
+                        trigger_level = nRxBuffer[7];
+                        ack[4] = stride >> 8; ack[5] = stride;
+                    }
+                    UART2_SendData(ack, sizeof(ack));
+                }
+                else if(nRxBuffer[6] == 0xFF)
+                {
+                    pending_stride = 1; pending_encoding = 0;
                     if (nRxBuffer[7] == 'B' && nRxBuffer[8] == 'I' &&
                         nRxBuffer[9] == '1' && nRxBuffer[11] == 1)
                     {
@@ -166,6 +185,7 @@ void DMA1_Stream5_IRQHandler(void)
                 {
                     trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
                     trigger_level = nRxBuffer[6];
+                    pending_stride = 1; pending_encoding = 0;
                 }
             }
             else
@@ -179,6 +199,9 @@ void DMA1_Stream5_IRQHandler(void)
 
                 /* continous or one-shot mode? */
                 coll_mode = nRxBuffer[10];
+                active_stride = coll_mode == 0 ? pending_stride : 1;
+                active_encoding = coll_mode == 0 ? pending_encoding : 0;
+                pending_stride = 1; pending_encoding = 0;
 
                 /* check if user averaging-request is valid */
                 if ((nRxBuffer[11] < 16) && (nRxBuffer[11] > 0))

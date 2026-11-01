@@ -28,6 +28,7 @@
  */
 
 #include "main.h"
+#include "downsample.h"
 
 extern volatile uint8_t aCmdTxBuffer[];
 extern __IO uint16_t aTxBuffer[CCDSize];
@@ -149,46 +150,16 @@ void UART2_SendData(const uint8_t *data, uint32_t length)
 
 void UART2_Tx_DMA(void)
 {
-    /* Reset the stream for every spectrum; prior transfers leave EN set. */
-    DMA_Cmd(DMA1_Stream6, DISABLE);
-    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
-    {
+    if (active_stride > 1 || active_encoding) {
+        uint8_t header[16];
+        uint16_t count = downsample_frame(aTxBuffer, CCDSize, active_stride, header);
+        uint16_t length = pack_samples(aTxBuffer, count, active_encoding);
+        header[4] |= active_encoding << 6;
+        UART2_SendData(header, sizeof(header));
+        UART2_SendData((const uint8_t *)aTxBuffer, length);
+    } else {
+        UART2_SendData((const uint8_t *)aTxBuffer, 2 * CCDSize);
     }
-    DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_FEIF6 | DMA_FLAG_DMEIF6 | DMA_FLAG_TEIF6 |
-                                 DMA_FLAG_HTIF6 | DMA_FLAG_TCIF6);
-    DMA_SetCurrDataCounter(DMA1_Stream6, 2 * CCDSize);
-    DMA_MemoryTargetConfig(DMA1_Stream6, (uint32_t)aTxBuffer, DMA_Memory_0);
-
-    /* Notice that UART is 8-bit. The 12-bit data from the ADC
-    is stored in a 16-bit array and sent 8-bit at a time. This
-    causes an endianness-like problem on the receiving side eg:
-        the uint16 0x0102 is received as 0x02 0x01
-    This must be handled on the receiving side with
-        proper_data[i] = (unsigned int)Rx_data[i+1] << 8 | Rx_data[i]; */
-
-    /* Transmit 1x */
-
-    /* Enable DMA stream */
-    DMA_Cmd(DMA1_Stream6, ENABLE);
-    USART_DMACmd(USART2, USART_DMAReq_Tx, ENABLE);
-
-    /* Wait for transmission to complete */
-    while (USART_GetFlagStatus(USART2, USART_FLAG_TC) == RESET)
-    {
-    }
-    while (DMA_GetFlagStatus(DMA1_Stream6, DMA_FLAG_TCIF6) == RESET)
-    {
-    }
-
-    DMA_Cmd(DMA1_Stream6, DISABLE);
-    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
-    {
-    }
-
-    /* Clear DMA Transfer Complete Flags */
-    DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_TCIF6);
-    /* Clear USART Transfer Complete Flags */
-    USART_ClearFlag(USART2, USART_FLAG_TC);
 }
 
 void sort_aRxBuffer()
