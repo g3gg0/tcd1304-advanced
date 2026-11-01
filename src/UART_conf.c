@@ -114,6 +114,13 @@ void USART2_conf()
 
 void UART2_SendData(uint8_t *data, uint32_t length)
 {
+    /* A completed DMA stream remains enabled. Disable it before changing NDTR/M0AR. */
+    DMA_Cmd(DMA1_Stream6, DISABLE);
+    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
+    {
+    }
+    DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_FEIF6 | DMA_FLAG_DMEIF6 | DMA_FLAG_TEIF6 |
+                                 DMA_FLAG_HTIF6 | DMA_FLAG_TCIF6);
     DMA_SetCurrDataCounter(DMA1_Stream6, length);
     DMA_MemoryTargetConfig(DMA1_Stream6, data, DMA_Memory_0);
 
@@ -129,6 +136,11 @@ void UART2_SendData(uint8_t *data, uint32_t length)
     {
     }
 
+    DMA_Cmd(DMA1_Stream6, DISABLE);
+    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
+    {
+    }
+
     /* Clear DMA Transfer Complete Flags */
     DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_TCIF6);
     /* Clear USART Transfer Complete Flags */
@@ -137,6 +149,13 @@ void UART2_SendData(uint8_t *data, uint32_t length)
 
 void UART2_Tx_DMA(void)
 {
+    /* Reset the stream for every spectrum; prior transfers leave EN set. */
+    DMA_Cmd(DMA1_Stream6, DISABLE);
+    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
+    {
+    }
+    DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_FEIF6 | DMA_FLAG_DMEIF6 | DMA_FLAG_TEIF6 |
+                                 DMA_FLAG_HTIF6 | DMA_FLAG_TCIF6);
     DMA_SetCurrDataCounter(DMA1_Stream6, 2 * CCDSize);
     DMA_MemoryTargetConfig(DMA1_Stream6, aTxBuffer, DMA_Memory_0);
 
@@ -161,6 +180,11 @@ void UART2_Tx_DMA(void)
     {
     }
 
+    DMA_Cmd(DMA1_Stream6, DISABLE);
+    while (DMA_GetCmdStatus(DMA1_Stream6) != DISABLE)
+    {
+    }
+
     /* Clear DMA Transfer Complete Flags */
     DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_TCIF6);
     /* Clear USART Transfer Complete Flags */
@@ -173,7 +197,8 @@ void sort_aRxBuffer()
     int i = 0;
 
     /* Examine for byte-shifts in aRxBuffer */
-    for (i = 0; i < RxDataSize; i++)
+	/* The last byte is checked against byte zero below to handle wraparound. */
+	for (i = 0; i < RxDataSize - 1; i++)
     {
         if ((aRxBuffer[i] == 69) && (aRxBuffer[i + 1] == 82))
             shift = i;
