@@ -29,6 +29,9 @@
 
 
 #include "main.h"
+#include "downsample.h"
+#include "acquisition.h"
+static AcquisitionClock acquisition_clock = {0};
 
 void virtual_GND(void);
 void flush_CCD(void);
@@ -166,15 +169,26 @@ int main(void)
 			/* reset flag */
 			change_exposure_flag = 0;
 			
-			flush_CCD();
-
-			/* set new integration time */
-			ICG_period = (nRxBuffer[6]<<24) | (nRxBuffer[7]<<16) | (nRxBuffer[8]<<8) | (nRxBuffer[9]);
-			SH_period =  (nRxBuffer[2]<<24) | (nRxBuffer[3]<<16) | (nRxBuffer[4]<<8) | (nRxBuffer[5]);
-			TIM_ICG_SH_conf();
-
-			sampling_active = 0;
-			sampling_requested = 1;
+            /* Snapshot command timing before starting any timers. */
+            uint32_t next_icg = ((uint32_t)nRxBuffer[6]<<24) | ((uint32_t)nRxBuffer[7]<<16) |
+                                ((uint32_t)nRxBuffer[8]<<8) | nRxBuffer[9];
+            uint32_t next_sh = ((uint32_t)nRxBuffer[2]<<24) | ((uint32_t)nRxBuffer[3]<<16) |
+                               ((uint32_t)nRxBuffer[4]<<8) | nRxBuffer[5];
+            if (acquisition_prepare(&acquisition_clock, next_sh, next_icg, active_fast)) {
+                /* SH/ICG continued through transmission, with ADC disabled.
+                   Arm exactly one new read at the next ICG boundary. No timer
+                   phase reset, repeated flush, or overlapping ADC/TX buffers. */
+                sampling_requested = 0;
+                sampling_active = 1;
+                pulse_counter = 6;
+            } else {
+                flush_CCD();
+                ICG_period = next_icg;
+                SH_period = next_sh;
+                TIM_ICG_SH_conf();
+                sampling_active = 0;
+                sampling_requested = 1;
+            }
 		}
 
 		if(sampling_requested == 1)
@@ -214,8 +228,10 @@ int main(void)
 					}
 					else
 					{
-                    	TIM_ICG_SH_stop();
-					}
+                    	if (!active_fast) TIM_ICG_SH_stop();
+                        acquisition_finished(&acquisition_clock, active_fast);
+                        sampling_active = 0;
+                    }
 
                     /* Transmit data in aTxBuffer */
                     UART2_Tx_DMA();
@@ -260,8 +276,10 @@ int main(void)
                     }
 					else
 					{
-                    	TIM_ICG_SH_stop();
-					}
+                    	if (!active_fast) TIM_ICG_SH_stop();
+                        acquisition_finished(&acquisition_clock, active_fast);
+                        sampling_active = 0;
+                    }
 
                     /* Transmit data in aTxBuffer */
                     UART2_Tx_DMA();

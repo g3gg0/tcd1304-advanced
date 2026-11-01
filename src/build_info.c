@@ -5,8 +5,8 @@
 #include "build_info.generated.h"
 #else
 /* Direct/non-PlatformIO builds still report compiler time; Git is explicitly unknown. */
-#define BUILD_INFO_JSON "{\"firmware\":\"tcd1304-advanced\",\"protocol\":1,\"features\":[\"downsample-v1\",\"sample-encoding-v1\"],\"max_downsample\":64,\"pixels\":3694,\"adc_bits\":12," \
-    "\"version\":\"1.2.0\",\"built_at\":\"" __DATE__ " " __TIME__ "\"," \
+#define BUILD_INFO_JSON "{\"firmware\":\"tcd1304-advanced\",\"protocol\":1,\"features\":[\"downsample-v1\",\"sample-encoding-v1\",\"fast-acquisition-v1\"],\"max_downsample\":64,\"pixels\":3694,\"adc_bits\":12," \
+    "\"version\":\"1.3.0\",\"built_at\":\"" __DATE__ " " __TIME__ "\"," \
     "\"build_timezone\":\"unspecified\",\"commit\":null,\"dirty\":null," \
     "\"board\":\"unknown\",\"mcu\":\"STM32F401RE\",\"compiler\":\"" __VERSION__ "\"}"
 #endif

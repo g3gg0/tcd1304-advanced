@@ -17,7 +17,7 @@ compiler = (str(Path(toolchain) / "bin" / ("arm-none-eabi-gcc.exe" if os.name ==
 destination = Path(env.subst("$BUILD_DIR")) / "generated"
 metadata = collect(
     project,
-    version=env.GetProjectOption("custom_firmware_version", "1.2.0"),
+    version=env.GetProjectOption("custom_firmware_version", "1.3.0"),
     board=env.GetProjectOption("board", "unknown"),
     mcu=board.get("build.mcu", "unknown"),
     environment=env.subst("$PIOENV"),

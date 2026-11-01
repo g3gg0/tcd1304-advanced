@@ -147,9 +147,9 @@ Send exactly 12 bytes, wait for and validate its 8-byte acknowledgement, then se
 | 7 | Trigger: `00` external falling edge PC13, `02` immediate |
 | 8..9 | ASCII `D1` (`44 31`) |
 | 10 | `02` configuration mode |
-| 11 | Low nibble revision `1`; bits 4..5 encoding ID; bits 6..7 zero |
+| 11 | Low nibble revision `1`; bits 4..5 encoding ID; bit 6 fast acquisition (requires capability below); bit 7 zero |
 
-Encoding IDs: 0=raw16, 1=log10, 2=packed12, 3=log8. Byte 11 is respectively `01`, `11`, `21`, `31` hexadecimal. Firmware rejects all other revision/flag bits, invalid strides and invalid triggers without mutating configuration.
+Encoding IDs: 0=raw16, 1=log10, 2=packed12, 3=log8. Byte 11 is respectively `01`, `11`, `21`, `31` hexadecimal. Firmware rejects all other revision/flag bits, invalid strides and invalid triggers without mutating configuration. Firmware 1.2.0 requires bit 6 zero; negotiate `fast-acquisition-v1` before setting it.
 
 Example: stride 15, immediate trigger, zero delay, logarithmic 8-bit:
 
@@ -189,7 +189,7 @@ V = floor(exp(Q / (2^B - 1) * log(4096)) - 1 + 0.5)
 
 Both endpoints (0 and 4095) are preserved. Log10 gives approximately 0.41% half-step error in `(ADC+1)`; log8 approximately 1.65%, plus integer rounding. Near full scale these can be roughly 17 / 67 ADC counts. Log values can reconstruct to 4095 even when the original was below saturation: **use header statistics for exposure assessment**, never the decoded peak. Quantization occurs before browser dark subtraction, so weak dark-corrected residuals on a large baseline can have larger relative errors. Calibration batches always request N=1/raw16.
 
-Firmware uses generated flash lookup tables (`tools/generate_log_encoding.py`) rather than per-pixel logarithms. In-place decimation and packing reuse the ADC buffer after the completed one-shot, without a second frame-sized RAM allocation. The full sensor is still sampled at the existing clock/timing; this mode reduces UART traffic only.
+Firmware uses generated flash lookup tables (`tools/generate_log_encoding.py`) rather than per-pixel logarithms. In-place decimation and packing reuse the ADC buffer after the completed one-shot, without a second frame-sized RAM allocation. The full sensor is still sampled at the existing clock/timing; downsampling/encoding alone reduces UART traffic only. The separately negotiated fast-acquisition option below also removes repeated startup overhead.
 
 ### Resolution, bandwidth and limits
 
@@ -208,4 +208,32 @@ At 500000 baud/8N1, payload transfer time is `bytes * 10 / 500000` seconds. Thes
 | Target 256, N=15, log10 | 247 | 325 | 6.50 ms |
 | Target 256, N=15, log8 | 247 | 263 | 5.26 ms |
 
-These are calculated serial times, **not measured frame rates or a 50-FPS guarantee**. The current repeated-one-shot implementation retains its CCD flush/readout/exposure delays. Nth-sample decimation can miss narrow spectral peaks; select full resolution for line identification and precise measurements. There is still no payload CRC or sequence number; header validation detects geometry/framing errors but cannot detect arbitrary payload corruption.
+These are calculated serial times, **not measured frame rates or a 50-FPS guarantee**. Without the fast-acquisition option, repeated one-shots retain their CCD flush/readout/exposure delays. Nth-sample decimation can miss narrow spectral peaks; select full resolution for line identification and precise measurements. There is still no payload CRC or sequence number; header validation detects geometry/framing errors but cannot detect arbitrary payload corruption.
+
+## Fast live acquisition (firmware 1.3.0)
+
+Firmware additionally advertises `fast-acquisition-v1`. A capable host can set **bit 6 (`0x40`) of FE byte 11** to retain the SH/ICG clocks between completed, immediately triggered one-shots. The acknowledgement echoes this bit. It does not change the spectrum header, payload encoding, or sample coordinates. Example stride 15 / log8 / immediate:
+
+```text
+Host:   45 52 00 0F 00 00 FE 02 44 31 02 71
+Device: 44 53 71 00 00 0F 00 F7
+```
+
+The flag is consumed/reset with the next capture, just like stride/encoding. It is effective only for mode 0 and immediate trigger selector 2. Triggered and legacy continuous captures retain their prior behavior. Firmware 1.2.0 does not understand this flag; capability detection is mandatory.
+
+### Why reducing bytes alone stopped helping
+
+Previously **every** host one-shot called `flush_CCD()`, which starts a 7.5 ms ICG clock and waits until the counter reaches pulse 3: approximately 22.5 ms after the first, near-immediate pulse. The counter then remains at 4. Acquisition restarts at the requested timing and waits for counter 6 before enabling ADC: at minimum ICG approximately `2 * 7.4 + 7.388 = 22.188 ms`. Together that is about **44.7 ms per frame before serial transfer**, consistent with an observed ceiling around 22–25 FPS. These are source-derived timing estimates, not measured analog timings.
+
+### Safe clock reuse
+
+1. First capture performs the existing complete flush and startup sequence.
+2. After a completed fast one-shot (including hardware averaging), firmware leaves SH/ICG running. ADC timer TIM4 is stopped by its completion interrupt. The frame buffer is then decimated/packed/sent with **no new ADC read armed**.
+3. After the host has received the complete frame, it configures and requests another capture. If the previous completed capture kept the clocks running and SH/ICG periods match exactly, firmware arms the ADC at the next ICG boundary. It does not flush, reconfigure timers, reset their phase, or wait through the startup counter again.
+4. Timing changes, calibration, external triggers, and ordinary legacy captures force the existing full restart. A capture without a completed reusable predecessor also restarts. Pausing host acquisition leaves only the SH/ICG clocks running; the ADC remains unarmed. Resuming at identical timing can reuse that maintained clock state.
+
+This remains a host-paced one-shot protocol, **not** the old overlapping continuous DMA mode. No next frame writes into the ADC/TX buffer while the previous frame is transmitted. No new sensor overclock or change to requested SH integration time is introduced.
+
+A reused frame costs up to one ICG boundary wait plus full ADC readout (`~7.388 ms` at 2 MHz fM), transfer/packing, command/ack, and USB/browser latency. At low enough wire resolution this removes the old fixed startup ceiling; actual 50 FPS depends on the selected timings, averaging, payload size and host adapter. Frame intervals are quantized by ICG boundaries. Hardware performance and analog correctness still require measurement on the device.
+
+The web app enables this feature automatically for live/single immediate acquisition on capable firmware. Calibration explicitly opts out and uses full raw16 frames. `Metadata.fastAcquisition` records the requested fast mode, not proof that a particular frame reused the clocks (the first frame and timing changes still warm up). Hover the FPS readout for host-observed configuration, first-data wait, receive and total times; exports retain them in `Metadata.timings`. These timings include host/USB scheduling and are not MCU timing or an analog sampling aperture measurement.

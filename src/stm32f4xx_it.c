@@ -18,6 +18,7 @@ extern __IO uint8_t CCD_flushed;
 extern __IO uint8_t avg_exps;
 extern __IO uint8_t exps_left;
 extern __IO uint8_t coll_mode;
+extern __IO uint8_t trigger_level;
 
 /**
  * @brief  This function handles NMI exception.
@@ -149,19 +150,19 @@ void DMA1_Stream5_IRQHandler(void)
             if (nRxBuffer[10] == 2)
             {
                 extern __IO uint32_t trigger_delay;
-                extern __IO uint8_t trigger_level;
 
                 if (nRxBuffer[6] == 0xFE)
                 {
                     uint16_t stride = (nRxBuffer[2] << 8) | nRxBuffer[3];
                     uint8_t valid = stride >= 1 && stride <= MAX_DOWNSAMPLE &&
                         (nRxBuffer[7] == 0 || nRxBuffer[7] == 2) &&
-                        nRxBuffer[8] == 'D' && nRxBuffer[9] == '1' && (nRxBuffer[11] & 0xCF) == 1;
+                        nRxBuffer[8] == 'D' && nRxBuffer[9] == '1' && (nRxBuffer[11] & 0x8F) == 1;
                     uint16_t count = valid ? (CCDSize + stride - 1) / stride : 0;
                     uint8_t ack[8] = {'D', 'S', nRxBuffer[11], valid ? 0 : 1, 0, 0, count >> 8, count};
                     if (valid) {
                         pending_stride = stride;
                         pending_encoding = (nRxBuffer[11] >> 4) & 3;
+                        pending_fast = (nRxBuffer[11] & 0x40) != 0;
                         trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
                         trigger_level = nRxBuffer[7];
                         ack[4] = stride >> 8; ack[5] = stride;
@@ -170,7 +171,7 @@ void DMA1_Stream5_IRQHandler(void)
                 }
                 else if(nRxBuffer[6] == 0xFF)
                 {
-                    pending_stride = 1; pending_encoding = 0;
+                    pending_stride = 1; pending_encoding = 0; pending_fast = 0;
                     if (nRxBuffer[7] == 'B' && nRxBuffer[8] == 'I' &&
                         nRxBuffer[9] == '1' && nRxBuffer[11] == 1)
                     {
@@ -185,7 +186,7 @@ void DMA1_Stream5_IRQHandler(void)
                 {
                     trigger_delay = (nRxBuffer[4] << 8) | nRxBuffer[5];
                     trigger_level = nRxBuffer[6];
-                    pending_stride = 1; pending_encoding = 0;
+                    pending_stride = 1; pending_encoding = 0; pending_fast = 0;
                 }
             }
             else
@@ -201,7 +202,8 @@ void DMA1_Stream5_IRQHandler(void)
                 coll_mode = nRxBuffer[10];
                 active_stride = coll_mode == 0 ? pending_stride : 1;
                 active_encoding = coll_mode == 0 ? pending_encoding : 0;
-                pending_stride = 1; pending_encoding = 0;
+                active_fast = coll_mode == 0 && trigger_level == 2 && pending_fast;
+                pending_stride = 1; pending_encoding = 0; pending_fast = 0;
 
                 /* check if user averaging-request is valid */
                 if ((nRxBuffer[11] < 16) && (nRxBuffer[11] > 0))

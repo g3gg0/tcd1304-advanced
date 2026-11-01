@@ -35,7 +35,7 @@ def compiler_version(compiler):
         return None
 
 
-def collect(project, *, version="1.2.0", board="unknown", mcu="unknown",
+def collect(project, *, version="1.3.0", board="unknown", mcu="unknown",
             environment="unknown", cpu_hz=0, compiler=None):
     project = Path(project)
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
@@ -49,7 +49,7 @@ def collect(project, *, version="1.2.0", board="unknown", mcu="unknown",
     return {
         "firmware": "tcd1304-advanced",
         "protocol": 1,
-        "features": ["downsample-v1", "sample-encoding-v1"],
+        "features": ["downsample-v1", "sample-encoding-v1", "fast-acquisition-v1"],
         "max_downsample": 64, "pixels": 3694, "adc_bits": 12,
         "version": str(version)[:48],
         "built_at": built.strftime("%Y-%m-%dT%H:%M:%SZ"),

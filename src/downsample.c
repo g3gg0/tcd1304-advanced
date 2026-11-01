@@ -1,6 +1,7 @@
 #include "downsample.h"
 #include "log_encoding.h"
 volatile uint8_t pending_encoding = 0, active_encoding = 0;
+volatile uint8_t pending_fast = 0, active_fast = 0;
 volatile uint16_t pending_stride = 1, active_stride = 1;
 static void be16(uint8_t *p, uint16_t v) { p[0] = v >> 8; p[1] = v; }
 uint16_t downsample_frame(volatile uint16_t *samples, uint16_t pixels, uint16_t stride, uint8_t header[16])

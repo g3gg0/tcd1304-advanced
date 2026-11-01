@@ -16,14 +16,15 @@ class DownsampleTests(unittest.TestCase):
     def setUpClass(cls):
         cls.fixture = ROOT / '.pio' / 'packing-tests' / uuid.uuid4().hex
         cls.fixture.mkdir(parents=True)
-        source = ROOT / 'src' / 'downsample.c'
+        source = cls.fixture / 'native.c'
+        source.write_text(''.join(f'#include "{(ROOT / "src" / file).as_posix()}"\n' for file in ['downsample.c', 'acquisition.c']), encoding='utf-8')
         if os.name == 'nt':
             vcvars = Path('C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat')
             if not vcvars.exists():
                 raise unittest.SkipTest('Native C checks require MSVC or a POSIX C compiler')
             cls.library = cls.fixture / 'packing.dll'
             batch = cls.fixture / 'compile.cmd'
-            batch.write_text(f'@echo off\ncall "{vcvars}" >nul\ncl /nologo /LD /O2 /TC /I"{ROOT / "include"}" /Fo"{cls.fixture / "packing.obj"}" "{source}" /link /OUT:"{cls.library}" /EXPORT:downsample_frame /EXPORT:pack_samples\n', encoding='utf-8')
+            batch.write_text(f'@echo off\ncall "{vcvars}" >nul\ncl /nologo /LD /O2 /TC /I"{ROOT / "include"}" /Fo"{cls.fixture / "packing.obj"}" "{source}" /link /OUT:"{cls.library}" /EXPORT:downsample_frame /EXPORT:pack_samples /EXPORT:acquisition_prepare /EXPORT:acquisition_finished\n', encoding='utf-8')
             subprocess.run(['cmd', '/d', '/c', str(batch)], cwd=cls.fixture, check=True, capture_output=True)
         else:
             cls.library = cls.fixture / 'packing.so'
@@ -71,6 +72,29 @@ class DownsampleTests(unittest.TestCase):
                     self.assertEqual(int.from_bytes(header[4:6], 'big'), stride)
                     self.assertEqual(int.from_bytes(header[6:8], 'big'), count)
                     self.assertEqual(payload, expected)
+
+    def test_fast_clock_requires_completed_fast_frame_and_identical_timing(self):
+        class Clock(ctypes.Structure):
+            _fields_ = [('sh', ctypes.c_uint32), ('icg', ctypes.c_uint32), ('ready', ctypes.c_uint8)]
+        prepare = self.lib.acquisition_prepare
+        prepare.argtypes = [ctypes.POINTER(Clock), ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8]
+        prepare.restype = ctypes.c_uint8
+        finish = self.lib.acquisition_finished
+        finish.argtypes = [ctypes.POINTER(Clock), ctypes.c_uint8]
+        clock = Clock()
+        self.assertEqual(prepare(ctypes.byref(clock), 20, 14800, 1), 0)  # Initial flush.
+        finish(ctypes.byref(clock), 1)
+        for _ in range(1000):
+            self.assertEqual(prepare(ctypes.byref(clock), 20, 14800, 1), 1)
+            finish(ctypes.byref(clock), 1)
+        self.assertEqual(prepare(ctypes.byref(clock), 40, 14800, 1), 0)  # Changed SH.
+        finish(ctypes.byref(clock), 1)
+        self.assertEqual(prepare(ctypes.byref(clock), 40, 16000, 1), 0)  # Changed ICG.
+        finish(ctypes.byref(clock), 1)
+        self.assertEqual(prepare(ctypes.byref(clock), 40, 16000, 0), 0)  # Calibration/trigger/legacy.
+        finish(ctypes.byref(clock), 0)
+        self.assertEqual(prepare(ctypes.byref(clock), 40, 16000, 1), 0)  # Clocks no longer valid.
+        self.assertEqual(prepare(ctypes.byref(clock), 40, 16000, 1), 0)  # No completion, no resume.
 
     def test_health_retains_clipping_and_invalid_samples_off_grid(self):
         values = [100] * 3694
