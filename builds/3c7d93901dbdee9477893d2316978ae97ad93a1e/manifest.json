@@ -1,0 +1,1 @@
+{"board": "nucleo_f401re", "commit": "3c7d93901dbdee9477893d2316978ae97ad93a1e", "filename": "tcd1304-advanced.bin", "size": 19900, "sha256": "ca0b95ea847d616c2176f3d14de946502d2f755d8613ebbeaf430fd1a3af6480", "title": "feat: Update build information and add downsampling functionality", "date": "2026-11-01T16:15:15+01:00"}
