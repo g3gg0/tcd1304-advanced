@@ -88,6 +88,8 @@ On a capture command, the firmware flushes the CCD, applies SH and ICG timing, t
 
 ## Build and license
 
+GitHub Actions builds every newly pushed commit on `master` (including multiple commits in one push) and publishes a prerelease tagged `build-<full-commit-sha>`. Only successful builds are published. The first push of a new branch builds its tip; pull requests build without publishing. Pushing `v*` tags still publishes regular releases. Each commit prerelease contains `tcd1304-advanced.bin` and `manifest.json` with the target board, full commit, binary size and SHA-256 checksum. Re-running a published build does not overwrite existing assets. SpectrumPlotterWeb uses these prereleases to offer firmware downloads.
+
 The PlatformIO project targets `nucleo_f401re` with the STM32 Standard Peripheral Library. The PlatformIO environment is named `nucleo_f411re` for historical reasons, but it builds for the **F401RE**, not the F411RE.
 
 ### Local build

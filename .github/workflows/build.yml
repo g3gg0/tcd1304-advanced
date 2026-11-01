@@ -24,12 +24,13 @@ jobs:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
         run: |
           python - <<'PY'
           import json, os, subprocess
           before = os.environ.get("BEFORE", "")
           shas = [os.environ["SHA"]]
-          if os.environ["EVENT"] == "push" and before and set(before) != {"0"}:
+          if os.environ["EVENT"] == "push" and os.environ["REF"] == "refs/heads/master" and before and set(before) != {"0"}:
               shas = subprocess.check_output(
                   ["git", "rev-list", "--reverse", before + ".." + os.environ["SHA"]],
                   text=True).splitlines() or shas
